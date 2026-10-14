@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="robots" content="noindex, nofollow">
+  <meta name="referrer" content="no-referrer">
+  <meta name="theme-color" content="#3F51B5">
+  <title>Property · Rent Manager</title>
+  <link rel="stylesheet" href="common.css">
+  <script src="common.js"></script>
+  <script src="store.js"></script>
+  <script src="forms.js"></script>
+</head>
+<body>
+  <div id="hdr" class="hdr"></div>
+  <main class="page">
+    <div id="range" class="range-box"></div>
+    <div class="summary">
+      <div class="sum"><small>Rent</small><b id="sRent" class="amt-rent">0</b></div>
+      <div class="sum"><small>Expense</small><b id="sExp" class="amt-expense">0</b></div>
+      <div class="sum"><small>Payout</small><b id="sPay" class="amt-payout">0</b></div>
+    </div>
+    <div class="net"><span>Left in hand (Rent − Expense − Payout)</span><span id="net">0</span></div>
+    <div class="sync" id="dep"></div>
+    <div class="sec"><span id="aHead">Active tenants</span></div>
+    <div id="active"></div>
+    <button id="oldBtn" class="pillbtn" type="button" hidden></button>
+    <div id="old" hidden></div>
+    <div class="sec"><span id="eHead">Entries</span></div>
+    <div id="entries"></div>
+  </main>
+  <button id="fab" class="fab" type="button" aria-label="Add entry" hidden>+</button>
+<script>
+(() => {
+  'use strict';
+  const A = App, S = A.store, { $, el, toast } = A;
+  if (!A.requireLogin({ admin: true })) return;
+  const id = new URLSearchParams(location.search).get('id') || '';
+  const rng = A.newRangeState();
+  let showOld = false;
+
+  const ICON = { Rent: '🏠', Expense: '🧾', Payout: '🏦', 'Deposit Received': '🔐', 'Deposit Refund': '🔐' };
+  const CLS = { Rent: 'amt-rent', Expense: 'amt-expense', Payout: 'amt-payout', 'Deposit Received': 'amt-deposit', 'Deposit Refund': 'amt-deposit' };
+  const SIGN = { Rent: '+', Expense: '-', Payout: '*', 'Deposit Received': '+', 'Deposit Refund': '-' };
+
+  function tenantCard(v, t, today) {
+    const cur = today.slice(0, 7), by = A.rentEntriesByMonth(v.txns, t.id);
+    const st = A.monthStatus(t, cur, by[cur], today), od = A.outstanding(t, v.txns, today), nd = A.nextDue(t, v.txns, today);
+    const lines = [el('div', { class: 'row-sub', text: 'Rent ₹' + A.money(t.monthly_rent) + ' · due on ' + t.due_day + (t.due_day === 1 ? 'st' : t.due_day === 2 ? 'nd' : t.due_day === 3 ? 'rd' : 'th') })];
+    if (t.status === 'Active') {
+      if (od.amount > 0) lines.push(el('div', { class: 'row-sub', style: 'color:var(--expense);font-weight:600', text: 'Overdue ₹' + A.money(od.amount) + ' (' + od.months.map((k) => A.monthLabel(k, 'm')).join(', ') + ')' }));
+      else if (nd) lines.push(el('div', { class: 'row-sub', text: 'Next: ' + A.monthLabel(nd.key, 'my') + ' · ₹' + A.money(nd.balance || nd.rent_due) + ' · ' + A.dateLabel(nd.due_date) }));
+    } else lines.push(el('div', { class: 'row-sub', text: 'Left ' + (t.lease_end ? A.dateLabel(t.lease_end) : '') + ' · deposit held ₹' + A.money(A.depositInfo(t, v.txns).held) }));
+    return el('a', { class: 'row tenant', href: 'tenant.html?id=' + encodeURIComponent(t.id), style: 'text-decoration:none' },
+      el('div', { class: 'ico', text: '👤' }),
+      el('div', { class: 'row-main' }, el('div', { class: 'row-title', text: A.tenantLabel(t) }), ...lines),
+      el('div', { class: 'row-side' }, t.status === 'Active' ? A.chip(st.status) : A.chip('Inactive'), t.status === 'Active' ? el('small', { text: A.monthLabel(cur, 'm') }) : null));
+  }
+
+  function entryRow(v, x) {
+    const t = v.tenants.find((y) => y.id === x.tenant_id), stt = S.statusOf(x.id);
+    const title = x.type === 'Rent' ? (t ? A.tenantLabel(t) : 'Rent') + ' · ' + (x.rent_month ? A.monthLabel(x.rent_month, 'my') : '')
+      : x.type.indexOf('Deposit') === 0 ? x.type + (t ? ' · ' + A.tenantLabel(t) : '') : (x.note ? x.note.split('\n')[0] : x.type);
+    const sub = A.dateLabel(x.date) + (x.type === 'Expense' || x.type === 'Payout' ? ' · ' + x.type : '') + (x.note && x.type !== 'Expense' && x.type !== 'Payout' ? ' · ' + x.note.split('\n')[0] : '');
+    const side = stt === 'failed' ? el('small', { class: 'st', text: '⚠ Not saved' }) : stt === 'queued' ? el('small', { text: '⏳ Saving…' }) : null;
+    const attrs = { class: 'row' + (stt === 'failed' ? ' failed' : ''), type: 'button' };
+    if (A.canEdit()) attrs.onclick = () => A.forms.openTxn({ edit: x }); else attrs.style = 'cursor:default';
+    return el('button', attrs, el('div', { class: 'ico', text: ICON[x.type] || '🏷️' }),
+      el('div', { class: 'row-main' }, el('div', { class: 'row-title', text: title }), el('div', { class: 'row-sub', text: sub })),
+      el('div', { class: 'row-side' }, el('div', { class: 'row-amt ' + CLS[x.type], text: SIGN[x.type] + A.money(x.amount) }), side));
+  }
+
+  function render() {
+    const v = S.view(); if (!v) return;
+    const prop = v.properties.find((p) => p.id === id);
+    if (!prop) { $('active').replaceChildren(el('div', { class: 'empty', text: 'Property not found.' })); return; }
+    A.setTitle(prop.name);
+    const r = A.rangeOf(rng), rep = A.propertyReport(v.txns, id, r.from, r.to), today = A.todayKey();
+    $('sRent').textContent = A.money(rep.rent); $('sExp').textContent = A.money(rep.expense); $('sPay').textContent = A.money(rep.payout);
+    $('net').textContent = (rep.net > 0 ? '+' : '') + A.money(rep.net); $('net').className = rep.net >= 0 ? 'amt-rent' : 'amt-expense';
+    $('dep').textContent = (rep.deposit_in || rep.deposit_out) ? 'Deposits in ₹' + A.money(rep.deposit_in) + ' · refunded ₹' + A.money(rep.deposit_out) + ' (not counted above)' : '';
+
+    const all = v.tenants.filter((t) => t.property_id === id);
+    const active = A.sortBy(all.filter((t) => t.status === 'Active'), (t) => (t.unit || '') + t.name.toLowerCase());
+    const old = A.sortBy(all.filter((t) => t.status !== 'Active'), (t) => (t.lease_end || '')).reverse();
+    $('aHead').textContent = 'Active tenants (' + active.length + ')';
+    $('active').replaceChildren(...(active.length ? active.map((t) => tenantCard(v, t, today)) : [el('div', { class: 'empty', style: 'padding:.8rem', text: 'No active tenants.' })]));
+    $('oldBtn').hidden = !old.length; $('oldBtn').textContent = (showOld ? 'Hide' : 'Show') + ' old tenants (' + old.length + ')';
+    $('old').hidden = !showOld || !old.length; $('old').replaceChildren(...old.map((t) => tenantCard(v, t, today)));
+
+    const list = A.sortBy(v.txns.filter((x) => x.property_id === id && x.date >= r.from && x.date <= r.to), (x) => x.date + x.id).reverse();
+    $('eHead').textContent = 'Entries (' + list.length + ')';
+    $('entries').replaceChildren(...(list.length ? list.map((x) => entryRow(v, x)) : [el('div', { class: 'empty', text: 'No entries in this range.' })]));
+  }
+
+  async function reload(force) {
+    try { await S.load(force); render(); } catch (err) { if (!S.view()) $('active').replaceChildren(el('div', { class: 'empty', text: err.message })); else if (force) throw err; }
+  }
+  $('oldBtn').addEventListener('click', () => { showOld = !showOld; render(); });
+  window.addEventListener('rent:change', render);
+  A.mountHeader('Property', { back: 'home.html', onRefresh: async () => { await S.resume(); await reload(true); toast('Refreshed'); } });
+  A.mountRange($('range'), rng, render);
+  if (A.canEdit()) { $('fab').hidden = false; $('fab').addEventListener('click', () => A.forms.openTxn({ property_id: id })); }
+  if (S.view()) render(); else $('active').replaceChildren(el('div', { class: 'loading', text: 'Loading…' }));
+  S.resume(); reload(false);
+})();
+</script>
+</body>
+</html>

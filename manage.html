@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="robots" content="noindex, nofollow">
+  <meta name="referrer" content="no-referrer">
+  <meta name="theme-color" content="#3F51B5">
+  <title>Manage · Rent Manager</title>
+  <link rel="stylesheet" href="common.css">
+  <script src="common.js"></script>
+  <script src="store.js"></script>
+  <script src="forms.js"></script>
+</head>
+<body>
+  <div id="hdr" class="hdr"></div>
+  <main class="page">
+    <div class="seg three" id="tabs"></div>
+    <div class="toolbar"><h2 id="h"></h2><button id="add" class="btn btn-sm" type="button">+ Add</button></div>
+    <div id="sub"></div>
+    <div id="list"></div>
+  </main>
+  <nav id="nav" class="nav"></nav>
+<script>
+(() => {
+  'use strict';
+  const A = App, S = A.store, { $, el, toast } = A;
+  if (!A.requireLogin({ admin: true })) return;
+  let tab = 'Properties', tenantFilter = 'Active';
+
+  function render() {
+    const v = S.view();
+    $('tabs').replaceChildren(...['Properties', 'Tenants', 'Rules'].map((t) => el('button', { type: 'button', class: t === tab ? 'active' : '', text: t, onclick: () => { tab = t; render(); } })));
+    $('h').textContent = tab;
+    $('add').hidden = !A.canEdit() || !v;
+    $('add').onclick = () => (tab === 'Properties' ? A.forms.openProperty(null) : tab === 'Tenants' ? A.forms.openTenant(null) : A.forms.openRule(null));
+    const sub = $('sub'), list = $('list'); sub.replaceChildren(); list.replaceChildren();
+    if (!v) { list.append(el('div', { class: 'loading', text: 'Loading…' })); return; }
+    const can = A.canEdit();
+    const propName = (id) => (id === 'ALL' ? 'All properties' : (v.properties.find((p) => p.id === id) || { name: '?' }).name);
+
+    if (tab === 'Properties') {
+      A.sortBy(v.properties, (p) => (p.status === 'Active' ? '0' : '1') + p.name.toLowerCase()).forEach((p) => list.append(el('button', { class: 'row', type: 'button', style: can ? '' : 'cursor:default', onclick: can ? () => A.forms.openProperty(p) : null },
+        el('div', { class: 'ico', text: '🏠' }), el('div', { class: 'row-main' }, el('div', { class: 'row-title', text: p.name }), el('div', { class: 'row-sub', text: p.address || '' }), p.note ? el('div', { class: 'note', text: p.note.split('\n')[0] }) : null), A.chip(p.status))));
+      if (!v.properties.length) list.append(el('div', { class: 'empty', text: 'No properties yet.' }));
+    } else if (tab === 'Tenants') {
+      sub.append(el('div', { class: 'seg' }, ...['Active', 'Old'].map((f) => el('button', { type: 'button', class: f === tenantFilter ? 'active' : '', text: f === 'Old' ? 'Old tenants' : 'Active', onclick: () => { tenantFilter = f; render(); } }))));
+      const items = A.sortBy(v.tenants.filter((t) => (tenantFilter === 'Active') === (t.status === 'Active')), (t) => propName(t.property_id).toLowerCase() + (t.unit || '') + t.name.toLowerCase());
+      let last = null;
+      items.forEach((t) => {
+        if (t.property_id !== last) { last = t.property_id; list.append(el('div', { class: 'day', text: propName(t.property_id) })); }
+        list.append(el('div', { class: 'row', style: 'cursor:default' }, el('div', { class: 'ico', text: '👤' }),
+          el('a', { class: 'row-main', href: 'tenant.html?id=' + encodeURIComponent(t.id), style: 'text-decoration:none;color:inherit' },
+            el('div', { class: 'row-title', text: A.tenantLabel(t) }), el('div', { class: 'row-sub', text: '₹' + A.money(t.monthly_rent) + ' · due ' + t.due_day + ' · ' + t.mobile })),
+          can ? el('button', { class: 'btn btn-sm', type: 'button', text: 'Edit', onclick: () => A.forms.openTenant(t) }) : null));
+      });
+      if (!items.length) list.append(el('div', { class: 'empty', text: tenantFilter === 'Active' ? 'No active tenants.' : 'No old tenants.' }));
+    } else {
+      const rules = A.sortBy(v.rules, (r) => (r.property_id === 'ALL' ? '0' : '1' + propName(r.property_id).toLowerCase()));
+      rules.forEach((r) => list.append(el('button', { class: 'row', type: 'button', style: can ? '' : 'cursor:default', onclick: can ? () => A.forms.openRule(r) : null },
+        el('div', { class: 'ico', text: '📜' }), el('div', { class: 'row-main' }, el('div', { class: 'row-title', style: 'white-space:normal', text: r.text }), el('div', { class: 'row-sub', text: propName(r.property_id) })))));
+      if (!rules.length) list.append(el('div', { class: 'empty', text: 'No rules yet.' }));
+    }
+  }
+
+  async function reload(force) {
+    try { await S.load(force); render(); } catch (err) { if (!S.view()) $('list').replaceChildren(el('div', { class: 'empty', text: err.message })); else if (force) throw err; }
+  }
+  window.addEventListener('rent:change', render);
+  A.mountHeader('⚙️ Manage', { onRefresh: async () => { await S.resume(); await reload(true); toast('Refreshed'); } });
+  A.mountNav('manage');
+  render(); S.resume(); reload(false);
+})();
+</script>
+</body>
+</html>

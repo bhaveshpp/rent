@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="robots" content="noindex, nofollow">
+  <meta name="referrer" content="no-referrer">
+  <meta name="theme-color" content="#3F51B5">
+  <title>Properties · Rent Manager</title>
+  <link rel="stylesheet" href="common.css">
+  <script src="common.js"></script>
+  <script src="store.js"></script>
+</head>
+<body>
+  <div id="hdr" class="hdr"></div>
+  <main class="page">
+    <div id="summary"></div>
+    <div id="list"></div>
+  </main>
+  <nav id="nav" class="nav"></nav>
+<script>
+(() => {
+  'use strict';
+  const A = App, S = A.store, { $, el, toast } = A;
+  if (!A.requireLogin({ admin: true })) return;
+
+  function monthView(v, t, today) {
+    const cur = today.slice(0, 7);
+    return A.monthStatus(t, cur, A.rentEntriesByMonth(v.txns, t.id)[cur], today);
+  }
+  function render() {
+    const v = S.view();
+    if (!v) return;
+    const today = A.todayKey(), cur = today.slice(0, 7);
+    let expected = 0, collected = 0, overdue = 0, pending = 0;
+    const rows = A.sortBy(v.properties, (p) => (p.status === 'Active' ? '0' : '1') + p.name.toLowerCase()).map((p) => {
+      const ts = v.tenants.filter((t) => t.property_id === p.id && t.status === 'Active');
+      let pPend = 0, pExp = 0, pCol = 0;
+      ts.forEach((t) => {
+        const st = monthView(v, t, today);
+        if (st.status === 'NA') return;
+        pExp += st.rent_due; pCol += st.paid;
+        if (st.status !== 'Paid') pPend++;
+        overdue += A.outstanding(t, v.txns, today).amount;
+      });
+      if (p.status === 'Active') { expected += pExp; collected += pCol; pending += pPend; }
+      return { p, n: ts.length, pPend, pExp, pCol };
+    });
+
+    $('summary').replaceChildren(el('div', { class: 'total-card' },
+      el('small', { text: A.monthLabel(cur, 'long') + ' — rent collected' }),
+      el('b', { text: '₹ ' + A.money(collected) + ' / ' + A.money(expected) }),
+      el('small', { text: (pending ? pending + ' tenant' + (pending > 1 ? 's' : '') + ' pending' : 'All paid') + (overdue > 0 ? ' · Overdue ₹ ' + A.money(overdue) : '') })));
+
+    const list = $('list'); list.replaceChildren();
+    if (!rows.length) list.append(el('div', { class: 'empty', text: A.canEdit() ? 'No properties yet. Go to Manage → Properties to add one.' : 'No properties yet.' }));
+    rows.forEach((r) => {
+      const inactive = r.p.status !== 'Active';
+      list.append(el('a', { class: 'row', href: 'property.html?id=' + encodeURIComponent(r.p.id), style: 'text-decoration:none;' + (inactive ? 'opacity:.6' : '') },
+        el('div', { class: 'ico', text: '🏠' }),
+        el('div', { class: 'row-main' }, el('div', { class: 'row-title', text: r.p.name }),
+          el('div', { class: 'row-sub', text: (r.p.address ? r.p.address + ' · ' : '') + r.n + ' active tenant' + (r.n === 1 ? '' : 's') })),
+        el('div', { class: 'row-side' }, inactive ? A.chip('Inactive') : r.n ? el('span', { class: 'chip ' + (r.pPend ? 'chip-Due' : 'chip-Paid'), text: r.pPend ? r.pPend + ' pending' : 'All paid' }) : el('small', { text: 'No tenants' }),
+          el('small', { text: r.n ? '₹ ' + A.money(r.pCol) + ' / ' + A.money(r.pExp) : '' }))));
+    });
+  }
+
+  async function reload(force) {
+    try { await S.load(force); render(); }
+    catch (err) { if (!S.view()) $('list').replaceChildren(el('div', { class: 'empty', text: err.message })); else if (force) throw err; }
+  }
+  window.addEventListener('rent:change', render);
+  A.mountHeader('🏠 ' + A.APP_NAME, { onRefresh: async () => { await S.resume(); await reload(true); toast('Refreshed'); } });
+  A.mountNav('home');
+  if (S.view()) render(); else $('list').replaceChildren(el('div', { class: 'loading', text: 'Loading…' }));
+  S.resume(); reload(false);
+})();
+</script>
+</body>
+</html>
